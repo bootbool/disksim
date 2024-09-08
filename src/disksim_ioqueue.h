@@ -139,6 +139,9 @@ void		ioqueue_reset_idledetecter (struct ioq *queue, int timechange);
 void		ioqueue_print_contents (struct ioq *queue);
 
 
+double		ioqueue_add_new_request_power (struct ioq *queue, ioreq_event *new);
+ioreq_event *	ioqueue_physical_access_done_power (struct ioq *queue, ioreq_event *curr);
+
 /* Request scheduling algorithms */
 
 #define MINSCHED	 1

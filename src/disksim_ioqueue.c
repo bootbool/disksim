@@ -104,7 +104,7 @@
 
 #include "modules/modules.h"
 
-
+#include "disksim_power.h"
 // schlos - i'm going to have to modify this to account for batched queues
 #define READY_TO_GO(iobufptr,queue) ( \
                                      ((iobufptr)->state == WAITING) && \
@@ -163,6 +163,8 @@ static char *statdesc_readsizestats	=	"Read request size";
 static char *statdesc_writesizestats	=	"Write request size";
 static char *statdesc_instqueuelen	=	"Instantaneous queue length";
 static char *statdesc_batchsizestats    =       "Batch size";
+
+extern int COMPRESS_PRINT_DEBUG;
 
 void print_batch_fcfs_queue(subqueue *queue)
 {
@@ -224,6 +226,38 @@ void ioqueue_print_contents (ioqueue *queue)
    }
 }
 
+void ioqueue_print_contents_screen (ioqueue *queue)
+{
+   int i;
+   iobuf *tmp;
+
+   if(queue->base.list){
+   tmp = queue->base.list->next;
+       printf ("Contents of base queue: listlen %d\n", queue->base.listlen);
+       for (i = 0; i < queue->base.iobufcnt; i++) {
+          printf("State: %d, blkno: %d\n", tmp->state, tmp->blkno);
+          tmp = tmp->next;
+       }
+   }
+
+   if(queue->timeout.list){
+       tmp = queue->timeout.list->next;
+       printf("Contents of timeout queue: listlen %d\n", queue->timeout.listlen);
+       for (i = 0; i < queue->timeout.iobufcnt; i++) {
+          printf("State: %d, blkno: %d\n", tmp->state, tmp->blkno);
+          tmp = tmp->next;
+       }
+   }
+
+   if(queue->priority.list){
+       tmp = queue->priority.list->next;
+       printf("Contents of priority queue: listlen %d\n", queue->priority.listlen);
+       for (i = 0; i < queue->priority.iobufcnt; i++) {
+          printf("State: %d, blkno: %d\n", tmp->state, tmp->blkno);
+          tmp = tmp->next;
+       }
+   }
+}
 
 static void ioqueue_print_subqueue_state (subqueue *queue)
 {
@@ -730,6 +764,9 @@ static void ioqueue_insert_new_request (subqueue *queue, iobuf *temp)
 
    // ioqueue_print_contents(queue);
 
+   if(COMPRESS_PRINT_DEBUG){
+    printf ("Entering ioqueue_insert_new_request: %d %p %f -> %p, simtime %f\n", temp->iolist->blkno, temp->iolist, temp->iolist->time, queue, simtime);
+    }
    ioqueue_update_subqueue_statistics(queue);
    queue->iobufcnt++;
    queue->listlen++;  // COULD BE A BUG!
@@ -2880,6 +2917,9 @@ static ioreq_event * ioqueue_remove_completed_request (subqueue *queue, ioreq_ev
 /*
 fprintf (outputfile, "Entering remove_completed_request - %d\n", queue->listlen);
 */
+   if(COMPRESS_PRINT_DEBUG){
+    printf ("Entering remove_completed_request: %d %p %f <<- %p, simtime %f\n", done->blkno, done, done->time, queue, simtime);
+    }
    ioqueue_update_subqueue_statistics(queue);
    tmp = queue->current;
    ASSERT (tmp != NULL);
@@ -2904,7 +2944,10 @@ fprintf (outputfile, "Entering remove_completed_request - %d\n", queue->listlen)
      ioqueue_remove_from_subqueue(queue, tmp);
    }
    */
-
+    if(COMPRESS_PRINT_DEBUG){
+      printf("STAT accstats %f , for %p %f\n", (simtime - tmp->starttime), done, done->time);
+      printf("STAT outtimestats %f , for %p %f\n", (simtime - tmp->iob_un.time), done, done->time);
+    }
    if (tmp->reqcnt == 1) {
      ioqueue_remove_from_subqueue(queue, tmp);
       trv = done;
@@ -3039,6 +3082,9 @@ fprintf (outputfile, "Entering remove_completed_request - %d\n", queue->listlen)
 /*
 fprintf (outputfile, "Exiting remove_completed_request\n");
 */
+   if(COMPRESS_PRINT_DEBUG){
+    printf ("Exiting remove_completed_request\n");
+    }
    return(trv);
 }
 
@@ -3182,7 +3228,6 @@ fprintf (outputfile, "Exiting ioqueue_get_next_request: %d\n", ((tmp) ? tmp->blk
    return(tmp);
 }
 
-
 double ioqueue_add_new_request (ioqueue *queue, ioreq_event *new)
 {
    iobuf *tmp;
@@ -3276,6 +3321,111 @@ fprintf (outputfile, "Entering ioqueue_add_new_request: %d\n", new->blkno);
       addtoextraq((event *)queue->idledetect);
       queue->idledetect = NULL;
    }
+/*
+fprintf (outputfile, "Exiting ioqueue_add_new_request\n");
+*/
+   return(0.0);
+}
+
+double ioqueue_add_new_request_power (ioqueue *queue, ioreq_event *new)
+{
+   iobuf *tmp;
+   int listlen;
+   int qlen;
+   int readlen;
+
+/*
+fprintf (outputfile, "Entering ioqueue_add_new_request: %d\n", new->blkno);
+*/
+   if(COMPRESS_PRINT_DEBUG)
+    printf ("Entering ioqueue_add_new_request: %d %p %f -> %p, simtime %f\n", new->blkno, new, new->time, queue, simtime);
+   new->time = simtime;
+   ioqueue_update_arrival_stats(queue, new);
+
+   tmp = (iobuf *) getfromextraq();
+   StaticAssert (sizeof(iobuf) <= sizeof(event));
+   tmp->starttime = -1.0;
+   tmp->state = WAITING;
+   tmp->next = NULL;
+   tmp->prev = NULL;
+   tmp->totalsize = new->bcount;
+   tmp->devno = new->devno;
+   tmp->blkno = new->blkno;
+   tmp->flags = new->flags;
+   tmp->iolist = new;
+   new->next = NULL;
+   tmp->iob_un.pend.waittime = 0;
+   tmp->iob_un.pend.concat = NULL;
+   tmp->reqcnt = 1;
+   tmp->opid = new->opid;
+   tmp->batchno = new->batchno;
+   tmp->batch_list = NULL;
+   if (tmp->batchno == -1) {
+     tmp->batch_complete = TRUE;
+   } else {
+     tmp->batch_complete = new->batch_complete;
+   }
+   switch(queue->pri_scheme) {
+      case ALLEQUAL:
+         if ((queue->base.sched_alg == ELEVATOR_LBN) || 
+             (queue->base.sched_alg == CYCLE_LBN)    || 
+             (queue->base.sched_alg == SSTF_LBN)     || 
+             (queue->base.sched_alg == VSCAN_LBN)) {
+           ioqueue_get_cylinder_mapping(queue, tmp, tmp->blkno, &tmp->cylinder, &tmp->surface, MAP_NONE);
+         } else {
+           ioqueue_get_cylinder_mapping(queue, tmp, tmp->blkno, &tmp->cylinder, &tmp->surface, -1);
+         }
+	 ioqueue_insert_new_request(&queue->base, tmp);
+	 break;
+      case TWOQUEUE:
+         if (new->flags & (TIME_CRITICAL|TIME_LIMITED)) {
+            if ((queue->priority.sched_alg == ELEVATOR_LBN) || 
+                (queue->priority.sched_alg == CYCLE_LBN)    || 
+                (queue->priority.sched_alg == SSTF_LBN)     || 
+                (queue->priority.sched_alg == VSCAN_LBN)) {
+              ioqueue_get_cylinder_mapping(queue, tmp, tmp->blkno, &tmp->cylinder, &tmp->surface, MAP_NONE);
+            } else {
+              ioqueue_get_cylinder_mapping(queue, tmp, tmp->blkno, &tmp->cylinder, &tmp->surface, -1);
+            }
+            ioqueue_insert_new_request(&queue->priority, tmp);
+         } else {
+            if ((queue->base.sched_alg == ELEVATOR_LBN) || 
+                (queue->base.sched_alg == CYCLE_LBN)    || 
+                (queue->base.sched_alg == SSTF_LBN)     || 
+                (queue->base.sched_alg == VSCAN_LBN)) {
+              ioqueue_get_cylinder_mapping(queue, tmp, tmp->blkno, &tmp->cylinder, &tmp->surface, MAP_NONE);
+            } else {
+              ioqueue_get_cylinder_mapping(queue, tmp, tmp->blkno, &tmp->cylinder, &tmp->surface, -1);
+            }
+	    ioqueue_insert_new_request(&queue->base, tmp);
+         }
+	 break;
+      default:
+         fprintf(stderr, "Unknown priority scheme being employed at ioqueue_add_new_request\n");
+	 exit(1);
+   }
+   listlen = queue->base.listlen + queue->timeout.listlen + queue->priority.listlen;
+   qlen = listlen - (queue->base.numoutstanding + queue->timeout.numoutstanding + queue->priority.numoutstanding);
+   readlen = queue->base.readlen + queue->timeout.readlen + queue->priority.readlen;
+   queue->maxlistlen = max(listlen, queue->maxlistlen);
+   queue->maxqlen = max(qlen, queue->maxqlen);
+   queue->maxreadlen = max(readlen, queue->maxreadlen);
+   queue->maxwritelen = max((listlen - readlen), queue->maxwritelen);
+   if (listlen == 1) {
+      stat_update(&queue->idlestats, (simtime - queue->idlestart));
+   }
+   queue->idlestart = simtime;
+   if (queue->idledetect) {
+      if (!(removefromintq((event *)queue->idledetect))) {
+	 fprintf(stderr, "existing idledetect event not on intq in ioqueue_add_new_request\n");
+	 exit(1);
+      }
+      addtoextraq((event *)queue->idledetect);
+      queue->idledetect = NULL;
+   }
+   if(COMPRESS_PRINT_DEBUG){
+        ioqueue_print_contents_screen(queue);
+    }
 /*
 fprintf (outputfile, "Exiting ioqueue_add_new_request\n");
 */
@@ -3529,7 +3679,6 @@ static void ioqueue_clobber_overlaps_subqueue (subqueue *queue, ioreq_event *ret
    }
 }
 
-
 ioreq_event * ioqueue_physical_access_done (ioqueue *queue, ioreq_event *curr)
 {
    ioreq_event *ret;
@@ -3567,6 +3716,53 @@ fprintf(outputfile, "Checking the base queue\n");
 
    // fprintf (outputfile, "Exiting ioqueue_physical_access_done: %f\n", disksim->lastphystime);
 
+   return(ret);
+}
+
+ioreq_event * ioqueue_physical_access_done_power (ioqueue *queue, ioreq_event *curr)
+{
+   ioreq_event *ret;
+/*
+fprintf(outputfile, "Entering ioqueue_physical_access_done: %d, devno %d\n", curr->blkno, curr->devno);
+ioqueue_print_contents(queue);
+*/
+   if(COMPRESS_PRINT_DEBUG){
+    printf ("Entering ioqueue_physical_access_done: %d %p %f <<- %p, simtime %f\n", curr->blkno, curr, curr->time, queue, simtime);
+    }
+   queue->idlestart = simtime;
+   
+   if ((queue->pri_scheme != ALLEQUAL) && ((curr->flags & (TIME_CRITICAL|TIME_LIMITED)) || ((queue->to_scheme != NOTIMEOUT) && (curr->flags & TIMED_OUT)))) {
+/*
+fprintf(outputfile, "Checking the priority queue\n");
+*/
+      ret = ioqueue_remove_completed_request(&queue->priority, curr);
+   } else if ((queue->to_scheme != NOTIMEOUT) && (curr->flags & (TIMED_OUT|HALF_OUT))) {
+/*
+fprintf(outputfile, "Checking the timeout queue\n");
+*/
+      ret = ioqueue_remove_completed_request(&queue->timeout, curr);
+   } else {
+/*
+fprintf(outputfile, "Checking the base queue\n");
+*/
+      ret = ioqueue_remove_completed_request(&queue->base, curr);
+   }
+   ASSERT(ret != NULL);
+   if (queue->comboverlaps) {
+      double arrtimemax = (queue->comboverlaps == 1) ? simtime : ret->time;
+      ioqueue_clobber_overlaps_subqueue(&queue->priority, ret, arrtimemax);
+      ioqueue_clobber_overlaps_subqueue(&queue->timeout, ret, arrtimemax);
+      ioqueue_clobber_overlaps_subqueue(&queue->base, ret, arrtimemax);
+   }
+   if (queue->idlework) {
+      ioqueue_reset_idledetecter(queue, 1);
+   }
+
+   // fprintf (outputfile, "Exiting ioqueue_physical_access_done: %f\n", disksim->lastphystime);
+
+   if(COMPRESS_PRINT_DEBUG){
+    ioqueue_print_contents_screen(queue);
+    }
    return(ret);
 }
 

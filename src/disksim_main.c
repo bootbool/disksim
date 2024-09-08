@@ -56,6 +56,7 @@
 
 
 #include "disksim_global.h"
+#include "disksim_compress.h"
 
 
 int main (int argc, char **argv)
@@ -76,5 +77,6 @@ int main (int argc, char **argv)
   }
   disksim_run_simulation ();
   disksim_cleanup_and_printstats ();
+  compress_destroy();
   exit(0);
 }

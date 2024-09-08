@@ -103,6 +103,7 @@
 
 #include "disksim_logorg.h"
 #include "modules/modules.h"
+#include "disksim_power.h"
 
 #define MAX_QUEUE_LENGTH 10000
 

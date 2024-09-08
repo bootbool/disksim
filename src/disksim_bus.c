@@ -130,6 +130,8 @@
 #define BUS_FREE	1
 #define BUS_OWNED	2
 
+extern int COMPRESS_PRINT_DEBUG;
+extern int COMPRESS_RECORD_DEBUG;
 
 /* INLINE */ static struct bus * getbus (int busno)
 {
@@ -271,6 +273,8 @@ void bus_delay(int busno, int devtype, int devno, double delay, ioreq_event *cur
    tmp->busno = busno;
    tmp->devtype = devtype;
    tmp->delayed_event = curr;
+   if(COMPRESS_PRINT_DEBUG)
+       printf("%p bus_delay delayed event %p delayed type %d time %f blkno %d cause %d\n", tmp, curr, curr->type, tmp->time, curr->blkno, curr->cause );
    addtointq((event *) tmp);
 }
 

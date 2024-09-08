@@ -212,7 +212,7 @@ void controller_smart_printstats (controller *currctlr, char *prefix);
 
 /* controller.c functions */
 
-INLINE controller * getctlr (int ctlrno);
+extern INLINE controller * getctlr (int ctlrno);
 controller *getctlrbyname(char *name, int *num);
 
 int load_ctlr_topo(struct lp_topospec *t, int *inbus);

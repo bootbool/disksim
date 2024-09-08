@@ -354,7 +354,7 @@ disksim_interface_dump_stats (struct disksim_interface *iface,
 }
 
 
-static int event_count = 0;
+static int event_count_if = 0;
 
 /* This is the callback for handling internal disksim events while running */
 /* as a slave of a system-level simulation.  "syssimtime" should be the    */
@@ -395,7 +395,7 @@ disksim_interface_internal_event (struct disksim_interface *iface,
        
      // fprintf (stderr, "handling internal event: type %d\n", disksim->intq->type);
      
-     disksim_simulate_event(event_count++);
+     disksim_simulate_event(event_count_if++);
    }
 
    if (disksim->intq != NULL) {
@@ -459,7 +459,7 @@ disksim_interface_request_arrive (struct disksim_interface *iface,
    while ((disksim->intq != NULL) 
 	  && (disksim->intq->time <= (curtime + 0.0001))) 
    {
-     disksim_simulate_event (event_count++);
+     disksim_simulate_event (event_count_if++);
    }
 
    if (disksim->intq) {

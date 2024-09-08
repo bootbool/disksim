@@ -104,9 +104,12 @@
 #include "disksim_stat.h"
 #include "disksim_iosim.h"
 #include "disksim_ioqueue.h"
+#include "disksim_compress.h"
 #include "config.h"
 
 #include <diskmodel/dm.h>
+
+typedef struct seg_comp_data seg_comp;
 
 // Disk states
 typedef enum {
@@ -215,6 +218,7 @@ typedef struct seg {
    int		hold_blkno; 		/* used for prepending */
    int		hold_bcount;		/* sequential writes   */
    struct diskreq_t *recyclereq;        /* diskreq to recycle this seg */
+   seg_comp *comp_metadata;
 } segment;
 
 
@@ -587,7 +591,7 @@ void disk_interferestats(disk *currdisk, ioreq_event *curr);
  * externalized disksim_disk*.c functions (should be here?) 
  */
 
-INLINE struct disk *getdisk (int diskno);
+extern INLINE struct disk *getdisk (int diskno);
 struct disk *getdiskbyname(char *name);
 
 void    disk_set_syncset (int setstart, int setend);
@@ -602,7 +606,7 @@ void    disk_cleanstats(void);
 int     disk_set_depth(int diskno, int inbusno, int depth, int slotno);
 int     disk_get_depth(int diskno);
 int     disk_get_inbus(int diskno);
-INLINE int     disk_get_busno(ioreq_event *curr);
+extern INLINE int     disk_get_busno(ioreq_event *curr);
 int     disk_get_slotno(int diskno);
 
 

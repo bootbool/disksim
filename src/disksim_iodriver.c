@@ -116,7 +116,7 @@
 /* read-only globals used during readparams phase */
 static char *statdesc_emptyqueue	=  "Empty queue delay";
 static char *statdesc_initiatenext	=  "Initiate next delay";
-
+int global_count_ioreqs = 0;
 
 struct iodriver *getiodriverbyname(char *name, int *num) {
   int c;
@@ -408,8 +408,8 @@ void iodriver_access_complete (int iodriverno, intr_event *intrp)
    }
 
    
-   disksim_exectrace("Request completion: simtime %f, devno %d, blkno %d, time %f\n", 
-		     simtime, req->devno, req->blkno);
+   disksim_exectrace("[ %d ]Request completion: simtime %f, devno %d, blkno %d\n",
+       global_count_ioreqs, simtime, req->devno, req->blkno);
 
    if (iodrivers[iodriverno]->devices[(req->devno)].queuectlr != -1) 
    {
@@ -747,14 +747,17 @@ event * iodriver_request (int iodriverno, ioreq_event *curr)
    ioreq_event *ret = NULL;
    ioreq_event *retlist = NULL;
    int numreqs;
+   global_count_ioreqs += 1;
 /*
    printf ("Entered iodriver_request - simtime %f, devno %d, blkno %d, cause %d\n", simtime, curr->devno, curr->blkno, curr->cause);
    fprintf (outputfile, "Entered iodriver_request - simtime %f, devno %d, blkno %d, cause %d\n", simtime, curr->devno, curr->blkno, curr->cause);
    fprintf (stderr, "Entered iodriver_request - simtime %f, devno %d, blkno %d, cause %d\n", simtime, curr->devno, curr->blkno, curr->cause);
 */
    if (outios) {
-      fprintf(outios, "%.6f\t%d\t%d\t%d\t%x\n", simtime, curr->devno, curr->blkno, curr->bcount, curr->flags);
+      fprintf(outios, "%.6f\t%d\t%d\t%d\t%x   [ %d ]\n", simtime, curr->devno, curr->blkno, curr->bcount, curr->flags, global_count_ioreqs);
+      compress_stats_add_ioreq(curr);
    }
+   printf("%.6f   %d    %d    %x  [%d]\n", simtime,curr->blkno, curr->bcount, curr->flags, global_count_ioreqs);
 
 #if 0
    fprintf (stderr, "Entered iodriver_request - simtime %f, devno %d, blkno %d, cause %d\n", simtime, curr->devno, curr->blkno, curr->cause);

@@ -32,8 +32,8 @@
 include .paths
 all: libparam.a
 	mkdir -p lib include/libparam
-	cp -p libparam.a lib
-	cp -p bitvector.h libparam.h include/libparam
+	cp  libparam.a lib
+	cp  bitvector.h libparam.h include/libparam
 
 FLEX=flex
 BISON=bison

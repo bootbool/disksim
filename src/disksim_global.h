@@ -289,6 +289,7 @@ typedef struct ioreq_ev {
    int    batch_size;
    struct ioreq_ev *batch_next;
    struct ioreq_ev *batch_prev;
+   double ratio;         /* Wen, compress ratio for individual io */
 } ioreq_event;
 
 typedef struct timer_ev {
@@ -426,6 +427,7 @@ typedef struct disksim {
 
 } disksim_t;
 
+extern int event_count;
 extern disksim_t *disksim;
 
 /* remapping #defines for some of the variables in disksim_t */
@@ -463,12 +465,12 @@ void intr_acknowledge (event *intrp);
 void resetstats (void);
 void disksim_simstop (void);
 void disksim_register_checkpoint (double atsimtime);
-INLINE void addtoextraq (event *temp);
+extern INLINE void addtoextraq (event *temp);
 void addlisttoextraq (event **headptr);
-INLINE event * getfromextraq (void);
+extern INLINE event * getfromextraq (void);
 event * event_copy (event *orig);
-INLINE void addtointq (event *temp);
-INLINE int removefromintq (event *curr);
+extern INLINE void addtointq (event *temp);
+extern INLINE int removefromintq (event *curr);
 void scanparam_int (char *parline, char *parname, int *parptr, int parchecks, int parminval, int parmaxval);
 void getparam_int (FILE *parfile, char *parname, int *parptr, int parchecks, int parminval, int parmaxval);
 void getparam_double (FILE *parfile, char *parname, double *parptr, int parchecks, double parminval, double parmaxval);

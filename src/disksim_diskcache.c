@@ -103,6 +103,10 @@
 #include "disksim_stat.h"
 #include "disksim_disk.h"
 
+extern int COMPRESS_PRINT_DEBUG;
+extern int COMPRESS_RECORD_DEBUG;
+extern int COMP_HEAD_SIZE;
+extern int COMP_MIN_LEFT;
 
 /* This variable is now in the diskinfo structure, but the real question */
 /* is why it exists at all...                                            */
@@ -119,7 +123,20 @@ static int disk_buffer_segment_wrap_needed (segment *seg, int endblkno)
 
 void disk_buffer_segment_wrap (segment *seg, int endblkno)
 {
-   seg->startblkno = max(seg->startblkno, (endblkno - seg->size));
+    if( compress_seg_is_enable(seg) ) {
+        if( endblkno != seg->comp_metadata->endblkno) {
+            printf("Wrap ERROR:endblkno seg %d comp %d | seg->endblkno %d\n", endblkno, seg->comp_metadata->endblkno, seg->endblkno);
+            exit(1);
+        }
+        if( seg->startblkno != seg->comp_metadata->startblkno) {
+            if(COMPRESS_PRINT_DEBUG)
+                printf("Wrap start:seg %d comp %d\n", seg->startblkno, seg->comp_metadata->startblkno);
+        }
+        compress_buffer_sync(seg);
+    }
+    else{
+        seg->startblkno = max(seg->startblkno, (endblkno - seg->size));
+    }
 }
 
 
@@ -410,9 +427,20 @@ int disk_buffer_block_available (disk *currdisk, segment *seg, int blkno)
          return(FALSE);
       }
       seg_owner = disk_buffer_seg_owner(seg,TRUE);
-      if (seg_owner && !(seg_owner->flags & COMPLETION_SENT) && 
-	  ((blkno - seg_owner->outblkno) >= seg->size)) {
+      if (   seg_owner
+          && !(seg_owner->flags & COMPLETION_SENT)
+          && compress_seg_is_enable(seg)
+          && ((blkno - seg_owner->outblkno) >= (seg->size * 512) /( COMP_HEAD_SIZE + 512 )) )
+      {
          return(FALSE);
+      }
+      if (   seg_owner
+          && !(seg_owner->flags & COMPLETION_SENT)
+          && ((blkno - seg_owner->outblkno) >= seg->size))
+      {
+        if ( !compress_seg_is_enable(seg) ) {
+         return(FALSE);
+        } 
       }
    } else if (seg->state == BUFFER_WRITING) {
       if ((blkno < currdisk->effectivehda->inblkno) || 
@@ -591,6 +619,10 @@ if (disk_printhack && (simtime >= disk_printhacktime)) {
 fprintf (outputfile, "%12.6f  %8p  Entering disk_buffer_select_read_segment\n",simtime,currdiskreq);
 fflush(outputfile);
 }
+if(COMPRESS_PRINT_DEBUG)
+    printf ("%12.6f  %8p  Entering disk_buffer_select_read_segment\n",simtime,currdiskreq);
+if(COMPRESS_RECORD_DEBUG)
+    compress_seg_print_all_stats(currdisk);
 
    currdiskreq->seg = NULL;
    currdiskreq->hittype = BUFFER_NOMATCH;
@@ -721,9 +753,14 @@ fflush(outputfile);
 	}
       }
 
-      if (curr_value > best_value) {
+      if (curr_value > best_value
+          ||(  curr_value==best_value
+            && currdiskreq->seg->state == BUFFER_EMPTY
+            && compress_seg_for_write(currdiskreq->seg))) {
 	 currdiskreq->seg = seg;
 	 currdiskreq->hittype = curr_hittype;
+    if(COMPRESS_PRINT_DEBUG)
+         printf("diskreq %p select segment %p read Hit type=%d\n",currdiskreq, seg, curr_hittype);
 	 best_value = curr_value;
       }
       seg = seg->next;
@@ -743,7 +780,16 @@ if (disk_printhack && (simtime >= disk_printhacktime)) {
 fprintf (outputfile, "                        segment = %8p, hittype = %d\n",currdiskreq->seg,currdiskreq->hittype);
 fflush(outputfile);
 }
-
+if(COMPRESS_PRINT_DEBUG){
+    printf ("SELECT read segment done             segment = %8p, hittype = %d\n",currdiskreq->seg,currdiskreq->hittype);
+    printf("    [%d %d] max %d\n", currdiskreq->seg->startblkno, currdiskreq->seg->endblkno, currdiskreq->seg->maxreadaheadblkno);
+}
+if(COMPRESS_RECORD_DEBUG){
+    compress_print_diskreq_info(currdiskreq);
+    compress_print_ioreq_info(currdiskreq->ioreqlist);
+    compress_seg_print_stats(currdiskreq->seg);
+    compress_print_0("SELECT read segment done\n");
+}
  return currdiskreq->seg;
 }
 
@@ -793,6 +839,10 @@ fprintf (outputfile, "%12.6f  %8p  Entering disk_buffer_select_write_segment\n",
 fprintf (outputfile, "                        numdirty = %d\n", currdisk->numdirty);
 fflush(outputfile);
 }
+if(COMPRESS_PRINT_DEBUG)
+    printf ("%12.6f  %8p  Entering disk_buffer_select_write_segment\n",simtime,currdiskreq);
+if(COMPRESS_RECORD_DEBUG)
+    compress_seg_print_all_stats(currdisk);
 
    currdiskreq->seg = NULL;
    currdiskreq->hittype = BUFFER_NOMATCH;
@@ -800,7 +850,9 @@ fflush(outputfile);
    while (seg) {
       curr_value = -1;
       curr_hittype = BUFFER_NOMATCH;
-      if (currdiskreq->hittype == BUFFER_COLLISION) {
+      if( compress_mechanism_is_enable()
+          && ! compress_seg_for_write( seg ) ){}
+      else if (currdiskreq->hittype == BUFFER_COLLISION) {
       } else if (seg->recyclereq) {
       } else if ((currdisk->dedicatedwriteseg) && 
 	  (seg != currdisk->dedicatedwriteseg)) {
@@ -1007,6 +1059,14 @@ fflush(outputfile);
 if (disk_printhack && (simtime >= disk_printhacktime)) {
 fprintf (outputfile, "                        segment = %8p, hittype = %d\n",currdiskreq->seg,currdiskreq->hittype);
 fflush(outputfile);
+}
+if(COMPRESS_PRINT_DEBUG)
+    printf ("SELECT write segment done             segment = %8p, hittype = %d\n",currdiskreq->seg,currdiskreq->hittype);
+if(COMPRESS_RECORD_DEBUG){
+    compress_print_diskreq_info(currdiskreq);
+    compress_print_ioreq_info(currdiskreq->ioreqlist);
+    compress_seg_print_stats(currdiskreq->seg);
+    compress_print_0("SELECT write segment done");
 }
 
    return(currdiskreq->seg);
@@ -1272,6 +1332,11 @@ if (disk_printhack && (simtime >= disk_printhacktime)) {
 fprintf (outputfile, "%12.6f  %8p  Entering disk_buffer_set_segment\n",simtime,currdiskreq);
 fflush(outputfile);
 }
+   if(COMPRESS_PRINT_DEBUG)
+    printf ("%12.6f  %8p  Entering disk_buffer_set_segment\n",simtime,currdiskreq);
+   
+   if (outios)
+       compress_stats_set_activetime(currdiskreq->ioreqlist, simtime);
 
    if (!seg) {
       fprintf(stderr, "diskreq has NULL segment in disk_buffer_set_segment\n");
@@ -1366,6 +1431,8 @@ fflush(outputfile);
    /* end of sanity checks, now do the work */
 
    disk_buffer_stats(currdisk,currdiskreq->ioreqlist,seg,currdiskreq->hittype);
+   if( compress_seg_is_enable(seg) )
+       compress_seg_hit_full_check(seg, currdiskreq->ioreqlist, currdiskreq->hittype);
 
    if (LRU_at_seg_list_head) {
       /* place segment at beginning of disk's segment list (for LRU) */
@@ -1468,6 +1535,11 @@ fflush(outputfile);
          currdiskreq->watermark = max(1, (int) ((double) min(seg->size, tmp_ioreq->bcount) * currdisk->readwater));
       } else {
          currdiskreq->watermark = (int) (((double) seg->size * currdisk->readwater) + (double) 0.9999999999);
+      }
+      if(compress_seg_is_enable(seg)){
+        if( currdiskreq->watermark * (COMP_HEAD_SIZE+512) > seg->size*512 ){
+            currdiskreq->watermark = (seg->size * 512) /( COMP_HEAD_SIZE + 512 );
+        }
       }
    } else {			/* WRITE */
       if (currdisk->reqwater) {
@@ -1577,6 +1649,9 @@ fflush(outputfile);
 	       seg->state = BUFFER_CLEAN;
                seg->access->blkno = currdiskreq->outblkno;
 	    }
+        if( compress_seg_is_enable(seg) ){
+            compress_seg_reset( seg, currdiskreq->outblkno );
+        }
 	    seg->startblkno = seg->endblkno = currdiskreq->outblkno;
 	    seg->minreadaheadblkno = seg->maxreadaheadblkno = -1;
 	    seg->hold_bcount = 0;
@@ -1587,15 +1662,17 @@ fflush(outputfile);
 	       currioreq = currioreq->next;
 	    }
 	    seg->minreadaheadblkno = max(seg->minreadaheadblkno, min((currioreq->blkno + currioreq->bcount + currdisk->minreadahead), currdisk->model->dm_sectors));
-
-	    seg->maxreadaheadblkno = max(seg->maxreadaheadblkno, min(disk_buffer_get_max_readahead(currdisk,seg,currioreq), currdisk->model->dm_sectors));
+        if(compress_seg_is_enable( seg ) ){
+            seg->maxreadaheadblkno = max(seg->maxreadaheadblkno, min(compress_seg_get_max_readahead(currdisk,seg,currioreq), currdisk->model->dm_sectors));
+        }else{
+            seg->maxreadaheadblkno = max(seg->maxreadaheadblkno, min(disk_buffer_get_max_readahead(currdisk,seg,currioreq), currdisk->model->dm_sectors));
+        }
 
 	    if ((seg->endblkno >= (currioreq->blkno + currioreq->bcount)) &&
 	        (currdisk->effectivehda == currdiskreq)) {
                seg->access->flags |= BUFFER_BACKGROUND;
             }
 	 }
-
       } else {			/* WRITE */
 	 if (!currdisk->effectivehda || 
 	     (currdisk->effectivehda == currdiskreq) ||
@@ -1684,15 +1761,55 @@ int disk_buffer_get_max_readahead (disk *currdisk, segment *seg, ioreq_event *cu
    if (currdisk->maxreadahead) {
       return(endreq + currdisk->maxreadahead);
    }
+   int count = compress_seg_get_sector_count(seg);
+   int left = compress_seg_get_phy_left(seg);
+   int start = compress_seg_get_startblkno(seg);
+   int end = compress_seg_get_endblkno(seg);
    if (currdisk->keeprequestdata > 0) {
       if ((curr->bcount >= seg->size) 
 	  || ((seg->size - curr->bcount) < currdisk->minreadahead)) 
 	{
 	  return(endreq + currdisk->minreadahead);
 	}
-      return(curr->blkno + seg->size);
+      // return(curr->blkno + seg->size);
+      if(compress_seg_is_enable(seg) ){
+          if( (curr->blkno == start)
+              && (curr->blkno == end) ){
+              return (curr->blkno + (seg->size * 512 ) / COMP_MIN_LEFT );
+          }else if( (curr->blkno == start) 
+              && (curr->blkno < end) ){
+              return (end + ( left / COMP_MIN_LEFT ) );
+          }else{
+              return (curr->blkno + (seg->size * 512 ) / COMP_MIN_LEFT );
+          }
+      }
+      else{
+          return(curr->blkno + seg->size);
+      }
    }
 
-   return(endreq + seg->size);
+   if( compress_seg_is_enable(seg) ){
+      if(  curr->blkno > start 
+        && curr->blkno <= end ){
+            left += compress_seg_get_size(seg, start, end);
+      }
+      int maxread=0;
+      if( curr->blkno == start ){
+          maxread = curr->blkno + count + ( left / COMP_MIN_LEFT ); 
+      }
+      else{
+        maxread = end;
+      }
+      if(    maxread <= end 
+          && endreq > start
+          && compress_seg_get_size(seg, start, endreq) + left > COMP_MIN_LEFT )
+      {
+          maxread = end +1;
+      }
+      return ( maxread );
+    }
+    else{
+       return(endreq + seg->size);
+    }
 }
 

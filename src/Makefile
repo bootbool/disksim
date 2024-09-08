@@ -32,12 +32,13 @@ FLEX = flex
 
 include .paths
 
-LDFLAGS = -lm -L. -ldisksim $(DISKMODEL_LDFLAGS) $(MEMSMODEL_LDFLAGS) \
-                            $(LIBPARAM_LDFLAGS) $(LIBDDBG_LDFLAGS) 
+LDFLAGS = -L. -ldisksim $(DISKMODEL_LDFLAGS) $(MEMSMODEL_LDFLAGS) \
+                            $(LIBPARAM_LDFLAGS) $(LIBDDBG_LDFLAGS)  -lm
 
 HP_FAST_OFLAGS = +O4
 NCR_FAST_OFLAGS = -O4 -Hoff=BEHAVED 
 FREEBLOCKS_OFLAGS =
+# DEBUG_OFLAGS = -g -DASSERTS -finstrument-functions # -DDEBUG=1
 DEBUG_OFLAGS = -g -DASSERTS # -DDEBUG=1
 PROF_OFLAGS = -g -DASSERTS -p
 GPROF_OFLAGS = -g -DASSERTS -pg
@@ -81,7 +82,7 @@ distclean: realclean
 modules: 
 	$(MAKE) -C modules
 	mkdir -p ../include/disksim/modules
-	cp -pR modules/*.h ../include/disksim/modules
+	cp -R modules/*.h ../include/disksim/modules
 	cp disksim_interface.h ../include
 
 modules/*.h modules/*.c:
@@ -99,9 +100,12 @@ DISKSIM_SRC = disksim.c disksim_intr.c disksim_pfsim.c \
 	disksim_cache.c disksim_cachemem.c disksim_cachedev.c \
 	disksim_simpledisk.c disksim_device.c \
 	disksim_loadparams.c \
-	raw_layout.c
+	raw_layout.c disksim_compress.c gcc.c disksim_power.c
 
 DISKSIM_OBJ = $(DISKSIM_SRC:.c=.o) 
+
+disksim_compress.o: disksim_compress.c disksim_compress.h
+	$(CC) -c $(CFLAGS) disksim_compress.c -o disksim_compress.o
 
 $(DISKSIM_OBJ): %.o: %.c
 	$(CC) -c $(CFLAGS) $< -o $@

@@ -103,7 +103,9 @@
 #include "disksim_stat.h"
 #include "disksim_disk.h"
 #include "disksim_ioqueue.h"
+#include "disksim_compress.h"
 #include "config.h"
+#include <string.h>
 
 #include "modules/modules.h"
 
@@ -159,6 +161,17 @@ int disk_get_numdisks (void)
    return(NUMDISKS);
 }
 
+int disk_get_devno(struct disk* p)
+{
+    int c;
+  for(c = 0; c < disksim->diskinfo->disks_len; c++) {
+    if(disksim->diskinfo->disks[c] == p ) {
+      return c;
+    }
+  }
+  return -1;
+
+}
 
 void disk_cleanstats (void)
 {
@@ -624,6 +637,17 @@ static void disk_buffer_printstats (int *set, int setsize, char *prefix)
   if (total == 0) {
     return;
   }
+
+  if( strstr(prefix, "Disk") != NULL ){
+      printf("======Disk Stats======\n");
+      printf("%sNumber of buffer accesses:    %d\n", prefix, total);
+      printf("%sBuffer hit ratio:        %6d \t%f\n", prefix, hits, ((double) hits / (double) total));
+      printf("%sBuffer miss ratio:            %6d \t%f\n", prefix, misses, ((double) misses / (double) total));
+      printf("%sBuffer read hit ratio:        %6d \t%f \t%f\n", prefix, fullreadhits, ((double) fullreadhits / (double) max(1,reads)), ((double) fullreadhits / (double) total));
+      printf("======================\n");
+  }
+
+
   fprintf(outputfile, "%sNumber of buffer accesses:    %d\n", prefix, total);
   fprintf(outputfile, "%sBuffer hit ratio:        %6d \t%f\n", prefix, hits, ((double) hits / (double) total));
   fprintf(outputfile, "%sBuffer miss ratio:            %6d \t%f\n", prefix, misses, ((double) misses / (double) total));
@@ -1062,6 +1086,20 @@ void disk_initialize (void)
        tmpseg->outstate = BUFFER_IDLE;
        tmpseg->state = BUFFER_EMPTY;
        tmpseg->size = currdisk->segsize;
+       if( currdisk->dedicatedwriteseg ){
+           if(tmpseg == currdisk->dedicatedwriteseg ){
+               compress_seg_init( tmpseg, j, WRITE );
+           }
+           else{
+               compress_seg_init( tmpseg, j, READ );
+           }
+       }
+       else if( !currdisk->dedicatedwriteseg && j<currdisk->numwritesegs ){
+           compress_seg_init( tmpseg, j, WRITE );
+       }
+       else{
+           compress_seg_init( tmpseg, j, READ );
+       }
        while (tmpseg->diskreqlist) {
 	 addlisttoextraq((event **) &tmpseg->diskreqlist->ioreqlist);
 	 tmpdiskreq = tmpseg->diskreqlist;

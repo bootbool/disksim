@@ -112,6 +112,8 @@
 
 /* Currently, controllers can not communicate via ownership-type buses */
 
+extern int COMPRESS_PRINT_DEBUG;
+extern int COMPRESS_RECORD_DEBUG;
 
 INLINE controller * getctlr (int ctlrno)
 {
@@ -367,10 +369,14 @@ void controller_bus_delay_complete(int ctlno, ioreq_event *curr, int busno)
 /*
 fprintf (outputfile, "Controller_bus_delay_complete - ctlno %d, busno %d, blkno %d, type %d, cause %d\n", currctlr->ctlno, curr->tempint1, curr->blkno, curr->type, curr->cause);
 */
+    if(COMPRESS_PRINT_DEBUG)
+        printf ("Controller_bus_delay_complete - ctlno %d, busno %d ---- delayed_event %8p, blkno %d, type %d, cause %d\n", currctlr->ctlno, curr->tempint1, curr, curr->blkno, curr->type, curr->cause);
    curr->next = NULL;
    curr->time = 0.0;
    if (busno == controller_get_upward_busno(currctlr, curr, &slotno)) {
       buswaitdir = UP;
+      if(COMPRESS_PRINT_DEBUG)
+          printf("UP\n");
       if (busno == -1) {
          intr_request ((event *)curr);
       } else {
@@ -381,6 +387,8 @@ fprintf (outputfile, "Controller_bus_delay_complete - ctlno %d, busno %d, blkno 
          currctlr->inbusowned = -1;
       }
    } else if (busno == controller_get_downward_busno(currctlr, curr, &slotno)) {
+      if(COMPRESS_PRINT_DEBUG)
+          printf("DOWN\n");
       buswaitdir = DOWN;
       bus_deliver_event(busno, slotno, curr);
       if (currctlr->outbusowned != -1) {

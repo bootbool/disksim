@@ -98,14 +98,17 @@
  * holders.
  */
 
-
 #include "disksim_iosim.h"
-
 #include "modules/modules.h"
+#include "disksim_disk.h"
+#include "disksim_power.h"
+#include "disksim_disk.h"
 
-
-
-
+extern int COMPRESS_PRINT_DEBUG;
+extern int COMPRESS_RECORD_DEBUG;
+extern double COMP_READ_TIME;
+extern power_stat_t *power_desp[MAXDISKS];
+extern int COMPRESS_PRINT_DEBUG;
 
 void iosim_initialize_iosim_info (void)
 {
@@ -156,11 +159,30 @@ void io_catch_stray_events (ioreq_event *curr)
 {
    switch (curr->type) {
    case DEVICE_DATA_TRANSFER_COMPLETE:
-     curr->time = device_get_blktranstime(curr);
-     curr->time = simtime + (curr->time * (double) curr->bcount);
-     addtointq((event *) curr);
-     break;
-     
+       if(COMPRESS_PRINT_DEBUG)
+           printf("%f io_catch_stray_events %p\n", simtime, curr);
+       disk        *currdisk = getdisk(curr->devno);
+       diskreq     *currdiskreq = NULL;
+       segment* seg = NULL;
+
+       currdiskreq = currdisk->effectivebus;
+       seg = currdiskreq->seg;
+       if( compress_seg_is_enable( seg ) ){
+            double disktime =0;
+            double tmptime = 0;
+            disktime = disk_get_blktranstime(curr);
+            tmptime = disktime >COMP_READ_TIME 
+                    ? disktime
+                    : COMP_READ_TIME;
+            curr->time = tmptime;
+            curr->time = simtime + (curr->time * (double) curr->bcount);
+       }else{
+            curr->time = disk_get_blktranstime(curr);
+            curr->time = simtime + (curr->time * (double) curr->bcount);
+       }
+        addtointq((event *) curr);
+        break;
+
    default:
      fprintf(stderr, "Unknown event type at io_catch_stray_events\n");
      exit(1);
@@ -211,6 +233,7 @@ void io_interrupt_complete (ioreq_event *intrp)
 void io_internal_event(ioreq_event *curr)
 {
    ASSERT(curr != NULL);
+double old_time = simtime;
 /*
 fprintf (outputfile, "%f: io_internal_event entered with event type %d, %f\n", curr->time, curr->type, simtime);
 */
@@ -258,6 +281,16 @@ fprintf (outputfile, "%f: io_internal_event entered with event type %d, %f\n", c
    case MEMS_BUS_INITIATE:
    case MEMS_BUS_TRANSFER:
    case MEMS_BUS_UPDATE:
+
+   if(COMPRESS_PRINT_DEBUG)
+       printf("io_internal_event: type %d blkno %d time %f\n", curr->type, curr->blkno, curr->time);
+
+     if( power_desp[curr->devno]->disk_hda_is_busy == 1 ){
+           if (power_waitfor_spinup(curr) != 0 ) {
+                 simtime = old_time;
+                 return;
+             }	
+         }
      device_event_arrive(curr);
      break;
 
@@ -686,6 +719,7 @@ void io_printstats()
    device_printstats();
    controller_printstats();
    bus_printstats();
+	power_stat_show();
 }
 
 
@@ -702,6 +736,7 @@ void io_setcallbacks ()
 
 void io_initialize (int standalone)
 {
+		power_initialization();
    if (disksim->iosim_info == NULL) {
       iosim_initialize_iosim_info ();
    }

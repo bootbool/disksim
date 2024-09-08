@@ -103,7 +103,10 @@
 #include "disksim_global.h"
 #include "disksim_hptrace.h"
 #include "disksim_iotrace.h"
-
+#include "disksim_compress.h"
+extern double COMP_DEFAULT_RATIO;
+extern int COMP_TRACE_USE_DEFAULT_RATIO; 
+extern int COMPRESS_PRINT_DEBUG;
 
 static void iotrace_initialize_iotrace_info ()
 {
@@ -590,11 +593,23 @@ static ioreq_event * iotrace_ascii_get_ioreq_event (FILE *tracefile, ioreq_event
       addtoextraq((event *) new);
       return(NULL);
    }
-   if (sscanf(line, "%lf %d %d %d %x\n", &new->time, &new->devno, &new->blkno, &new->bcount, &new->flags) != 5) {
-      fprintf(stderr, "Wrong number of arguments for I/O trace event type\n");
-      fprintf(stderr, "line: %s", line);
-      ddbg_assert(0);
+
+  if( COMP_TRACE_USE_DEFAULT_RATIO == 1 ) {
+       new->ratio = COMP_DEFAULT_RATIO;
+       if (sscanf(line, "%lf %d %d %d %x\n", &new->time, &new->devno, &new->blkno, &new->bcount, &new->flags) != 5) {
+          fprintf(stderr, "Wrong number of arguments for I/O trace event type\n");
+          fprintf(stderr, "line: %s", line);
+          ddbg_assert(0);
+       }       
    }
+   else {
+       if (sscanf(line, "%lf %d %d %d %x %lf\n", &new->time, &new->devno, &new->blkno, &new->bcount, &new->flags, &new->ratio) != 6) {
+          fprintf(stderr, "Wrong number of arguments for I/O trace event type\n");
+          fprintf(stderr, "line: %s", line);
+          ddbg_assert(0);
+       }
+   }
+
    if (new->flags & ASYNCHRONOUS) {
       new->flags |= (new->flags & READ) ? TIME_LIMITED : 0;
    } else if (new->flags & SYNCHRONOUS) {
@@ -605,6 +620,9 @@ static ioreq_event * iotrace_ascii_get_ioreq_event (FILE *tracefile, ioreq_event
    new->opid = 0;
    new->busno = 0;
    new->cause = 0;
+   if(COMPRESS_PRINT_DEBUG)
+       printf("ASC GET %.6f   %d    %d    %x\n", simtime,new->blkno, new->bcount, new->flags);
+   compress_set_ratio_ioreq( new->blkno, new->blkno + new->bcount, new,  new->ratio);
    return(new);
 }
 

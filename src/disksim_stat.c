@@ -100,6 +100,7 @@
 
 #include "disksim_global.h"
 #include "disksim_stat.h"
+#include <string.h>
 
 
 int stat_get_count (statgen *statptr)
@@ -326,6 +327,9 @@ void stat_print_set (statgen **statset, int statcnt, char *identstr)
       runsquares = (runsquares > 0.0) ? sqrt(runsquares) : 0.0;
    } else {
       runsquares = 0.0;
+   }
+   if( strstr( identstr, "Disk") != NULL ){
+       printf("%s%s average: \t%f\n", identstr, statdesc, avg);
    }
    fprintf(outputfile, "%s%s average: \t%f\n", identstr, statdesc, avg);
    fprintf(outputfile, "%s%s std.dev.:\t%f\n", identstr, statdesc, runsquares);

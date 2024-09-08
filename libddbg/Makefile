@@ -36,8 +36,8 @@ CFLAGS = -g -I../libparam
 
 all: libddbg.a
 	mkdir -p include/libddbg lib
-	cp -p libddbg.h include/libddbg
-	cp -p libddbg.a lib 
+	cp  libddbg.h include/libddbg
+	cp  libddbg.a lib 
 
 LT_SRC = ddbg_assert.c ddbg_trace.c
 LT_OBJ = $(LT_SRC:.c=.o) 

@@ -299,7 +299,7 @@ int  logorg_check_dependencies (logorg *currlogorg, outstand *req, ioreq_event *
 // or 0 if it doesn't exist
 logorg *getlogorgbyname(logorg **, int, char *name, int *n);
 
-INLINE void logorg_set_arraydisk(struct logorg *l, int n);
+extern INLINE void logorg_set_arraydisk(struct logorg *l, int n);
 
 logorg *getlogorgbyname(logorg **logorgs, 
 			int numlogorgs, 

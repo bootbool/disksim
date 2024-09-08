@@ -102,6 +102,7 @@
 #include "disksim_ioface.h"
 #include "disksim_pfface.h"
 #include "disksim_iotrace.h"
+#include "disksim_compress.h"
 #include "config.h"
 
 #include "modules/disksim_global_param.h"
@@ -116,8 +117,15 @@
 #include <sys/mman.h>
 #endif
 
+#include "disksim_power.h"
 
+int event_count = 1;
 disksim_t *disksim = NULL;
+extern FILE* comp_debug_file;
+extern int COMPRESS_PRINT_DEBUG;
+extern int COMPRESS_RECORD_DEBUG;
+extern int COMP_TRACE_USE_DEFAULT_RATIO;
+extern double COMP_DEFAULT_RATIO;
 
 /* legacy hack for HPL traces... */
 #define PRINT_TRACEFILE_HEADER	FALSE
@@ -180,6 +188,8 @@ INLINE void addtoextraq (event *temp)
    if (temp == NULL) {
       return;
    }
+   if(COMPRESS_PRINT_DEBUG)
+       printf("%s %p type %d time %f\n", __FUNCTION__, temp, temp->type, temp->time);
    temp->next = disksim->extraq;
    temp->prev = NULL;
    disksim->extraq = temp;
@@ -335,7 +345,8 @@ INLINE void addtointq (event *newint)
      break;
    }
 
-
+   if(COMPRESS_PRINT_DEBUG)
+       printf("addtointq %p type %d time %f (bcount) %d (blkno) %d\n", newint, newint->type, newint->time, newint->temp, ((ioreq_event*)newint)->blkno );
    if (disksim->intq == NULL) {
       disksim->intq = newint;
       newint->next = NULL;
@@ -383,6 +394,8 @@ INLINE static event * getfromintq ()
 
    temp->next = NULL;
    temp->prev = NULL;
+   if(COMPRESS_PRINT_DEBUG)
+       printf("%s %p type %d time %f\n", __FUNCTION__, temp, temp->type, temp->time);
    return(temp);
 }
 
@@ -770,6 +783,18 @@ void disksim_simulate_event (int num)
     disksim_simstop ();
   } 
   else {
+
+     if(COMPRESS_PRINT_DEBUG) {
+    printf ("%f : %p type %d, (bcount) %d (blkno) %d\n", simtime, curr, curr->type, curr->temp, ((ioreq_event*)curr)->blkno);
+    printf ("---------------\n");
+        event *tmp = disksim->intq;
+        int i = 1;
+        while( tmp ){
+            printf ("%d - %f: event %p type %d, temp(blkno) %d, space %d,  %f\n",i++, tmp->time, tmp, tmp->type, tmp->temp, (int)tmp->space, simtime);
+            tmp = tmp -> next;
+        }
+    printf ("---------------\n");
+    }
    
     switch(disksim->trace_mode) {
     case DISKSIM_NONE:
@@ -807,6 +832,11 @@ void disksim_simulate_event (int num)
     {
       io_internal_event ((ioreq_event *)curr);
     } 
+    else if ((curr->type >= POWER_MIN_EVENT) 
+	     && (curr->type <= POWER_MAX_EVENT)) 
+    {
+      power_internal_event ((power_event *)curr);
+    }
     else if (curr->type == CHECKPOINT) 
     {
       if (disksim->checkpoint_interval) {
@@ -908,20 +938,26 @@ void disksim_setup_disksim (int argc, char **argv)
   setEndian();
   
   StaticAssert (sizeof(intchar) == 4);
-  if (argc < 6) {
+  if (argc < 7) {
     fprintf(stderr,"Usage: %s paramfile outfile format iotrace synthgen?\n", argv[0]);
     exit(1);
   }
 
-#ifdef FDEBUG
-  fprintf (stderr, "%s %s %s %s %s %s\n", argv[0], argv[1], argv[2], argv[3],
-	   argv[4], argv[5]);
-#endif
-
-  if ((argc - 6) % 3) {
-    fprintf(stderr, "Parameter file overrides must be 3-tuples\n");
-    exit(1);
-   } 
+  if( COMP_TRACE_USE_DEFAULT_RATIO == 1 ) {
+      printf ("%s %s %s %s %s %s %s %s\n", argv[0], argv[1], argv[2], argv[3],
+	   argv[4], argv[5], argv[6], argv[7]);
+      if ((argc - 8) % 3) {
+        fprintf(stderr, "Parameter file overrides must be 3-tuples\n");
+        exit(1);
+       } 
+  }else{
+      printf ("%s %s %s %s %s %s %s\n", argv[0], argv[1], argv[2], argv[3],
+	   argv[4], argv[5], argv[6]);
+      if ((argc - 7) % 3) {
+        fprintf(stderr, "Parameter file overrides must be 3-tuples\n");
+        exit(1);
+       } 
+  }
    
   disksim_setup_outputfile (argv[2], "w");
   fprintf (outputfile, "\n*** Output file name: %s\n", argv[2]); 
@@ -951,8 +987,21 @@ void disksim_setup_disksim (int argc, char **argv)
 
   fflush(outputfile); 
 
-  disksim->overrides = argv + 6;
-  disksim->overrides_len = argc - 6;
+  if( COMP_TRACE_USE_DEFAULT_RATIO == 1 ) {
+      compress_trace_set_default_ratio( argv, 6 );
+      power_read_params(argv[7]);
+      fprintf(outputfile, "reading power params complete\n");
+      fflush(outputfile);
+      disksim->overrides = argv + 8;
+      disksim->overrides_len = argc - 8;
+  }else{
+      power_read_params(argv[6]);
+      fprintf(outputfile, "reading power params complete\n");
+      fflush(outputfile);
+
+      disksim->overrides = argv + 7;
+      disksim->overrides_len = argc - 7;
+  }
 
    // asserts go to stderr by default
   ddbg_assert_setfile(stderr);
@@ -996,7 +1045,7 @@ void disksim_setup_disksim (int argc, char **argv)
   }
 
 
-
+  compress_init();
   initialize();
   fprintf(outputfile, "Initialization complete\n");
   fflush(outputfile);
@@ -1055,9 +1104,12 @@ void disksim_restore_from_checkpoint (char *filename)
 
 void disksim_run_simulation ()
 {
-  int event_count = 0;
   DISKSIM_srand48(1000003);
   while (disksim->stop_sim == FALSE) {
+   if(COMPRESS_PRINT_DEBUG)
+      printf("\n**** simulate count %d ****\n", event_count);
+   if(COMPRESS_RECORD_DEBUG)
+      fprintf(comp_debug_file, "**** simulate count %d ****\n", event_count);
     disksim_simulate_event(event_count);
     //    printf("disksim_run_simulation: event %d\n", event_count);
     event_count++;
@@ -1104,6 +1156,8 @@ void disksim_cleanup_and_printstats ()
 {
   disksim_printstats();
   disksim_cleanup();
+
+    power_cleanup();
 }
 
 
@@ -1134,5 +1188,10 @@ disksim_exectrace(char *fmt, ...) {
     vfprintf(disksim->exectrace, fmt, ap);
     va_end(ap);
   }
+}
+
+void print_event_count(char* s)
+{
+    printf("%d %s\n", event_count, s);
 }
 

@@ -105,9 +105,10 @@
 #include "disksim_ioqueue.h"
 #include "disksim_bus.h"
 #include "inline.h"
-
+#include "disksim_compress.h"
 #include "inst.h"
 
+#include "disksim_power.h"
 // move these protos, etc, to "disk_private.h" or something!
 static void 
 disk_buffer_sector_done (disk *currdisk, 
@@ -158,7 +159,13 @@ static double
 disk_buffer_estimate_acctime(disk *currdisk, 
 			     ioreq_event *curr, 
 			     double maxtime);
-
+extern FILE* comp_debug_file;
+extern int COMPRESS_RECORD_DEBUG;
+extern int COMPRESS_PRINT_DEBUG;
+extern int COMP_HEAD_SIZE;
+extern double COMP_READ_TIME;
+extern power_stat_t *power_desp[MAXDISKS];
+extern power_param_t *power_cfg ;
 
 int 
 disk_set_depth(int diskno, int inbusno, int depth, int slotno)
@@ -255,6 +262,9 @@ static void disk_send_event_up_path (ioreq_event *curr, double delay)
     fprintf (outputfile, "Disk_send_event_up_path - devno %d, type %d, cause %d, blkno %d\n", curr->devno, curr->type, curr->cause, curr->blkno);
   */
 
+
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("Disk_send_event_up_path - devno %d, type %d, cause %d, blkno %d\n", curr->devno, curr->type, curr->cause, curr->blkno);
   busno = disk_get_busno(curr);
   slotno = currdisk->slotno[0];
 
@@ -280,6 +290,8 @@ static void disk_send_event_up_path (ioreq_event *curr, double delay)
     }
   } 
   else if(currdisk->busowned == busno) {
+  if(COMPRESS_PRINT_DEBUG)
+        printf ("Already own bus - so send it on up\n");
     /*
       fprintf (outputfile, "Already own bus - so send it on up\n");
     */
@@ -338,6 +350,8 @@ disk_bus_delay_complete(int devno,
   /*
    * fprintf (outputfile, "Entered disk_bus_delay_complete\n");
    */
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("disk_bus_delay_complete - devno %d, busno %d ---- delayed_event %8p, blkno %d, type %d, cause %d\n", devno, sentbusno, curr, curr->blkno, curr->type, curr->cause);
   if(curr == currdisk->buswait) {
     currdisk->buswait = curr->next;
   } else {
@@ -446,6 +460,8 @@ static void disk_request_complete(disk *currdisk,
     fflush(outputfile);
   }
 
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("%12.6f  %8p  Entering disk_request_complete\n", simtime, currdiskreq);
 
   //  printf("disk_request_complete %f\n", simtime);
 
@@ -474,7 +490,7 @@ static void disk_request_complete(disk *currdisk,
 
     disk_interferestats(currdisk, tmpioreq);
     /* GROK: this would seem to leak (or worse) for concatenating schedulers */
-    ddbg_assert2(ioqueue_physical_access_done(currdisk->queue,tmpioreq),
+    ddbg_assert2(ioqueue_physical_access_done_power(currdisk->queue,tmpioreq),
 	       "ioreq_event not found");
 
     currdisk->currentbus = 
@@ -503,7 +519,7 @@ static void disk_request_complete(disk *currdisk,
 	disk_interferestats(currdisk, tmpioreq);
       }
 
-      evtfound = (int)ioqueue_physical_access_done(currdisk->queue,tmpioreq);
+      evtfound = (int)ioqueue_physical_access_done_power(currdisk->queue,tmpioreq);
 
       ddbg_assert2(evtfound != 0, "ioreq_event not found");
 
@@ -515,6 +531,9 @@ static void disk_request_complete(disk *currdisk,
 	ddbg_assert2((currdiskreq->outblkno <= currdiskreq->seg->endblkno),
 		   "Unable to erase request data from segment");
 
+     if( compress_seg_is_enable( currdiskreq->seg )) {
+        compress_seg_forward_startblkno(currdiskreq->seg, currdiskreq->outblkno);
+     }
 	currdiskreq->seg->startblkno = currdiskreq->outblkno;
       }
 
@@ -560,6 +579,8 @@ static void disk_request_complete(disk *currdisk,
 
   disk_send_event_up_path(curr, (delay * currdisk->timescale));
   currdisk->outstate = DISK_WAIT_FOR_CONTROLLER;
+  if(COMPRESS_PRINT_DEBUG)
+     printf( "disk %8p outstate changed to DISK_WAIT_FOR_CONTROLLER req %p\n", currdisk, currdiskreq);
 }
 
 
@@ -586,6 +607,8 @@ static void disk_reconnection_or_transfer_complete (ioreq_event *curr)
 	     simtime, currdiskreq, curr->devno);
     fflush(outputfile);
   }
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("%12.6f  %8p  Entering disk_reconnection_or_transfer_complete for disk %d\n", simtime, currdiskreq, curr->devno);
 
   tmpioreq = currdiskreq->ioreqlist;
   while (tmpioreq) {
@@ -608,6 +631,8 @@ static void disk_reconnection_or_transfer_complete (ioreq_event *curr)
   
   currdisk->effectivebus = currdiskreq;
   currdisk->outstate = DISK_TRANSFERING;
+  if(COMPRESS_PRINT_DEBUG)
+     printf( "disk %8p outstate changed to DISK_TRANSFERING req %p\n", currdisk, currdiskreq);
   curr->type = DEVICE_DATA_TRANSFER_COMPLETE;
   curr = disk_buffer_transfer_size(currdisk, currdiskreq, curr);
 
@@ -615,6 +640,8 @@ static void disk_reconnection_or_transfer_complete (ioreq_event *curr)
     fprintf (outputfile, "                        disk_buffer_transfer_size set bcount to %d\n", curr->bcount);
     fflush(outputfile);
   }
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("                        disk_buffer_transfer_size set bcount to %d\n", curr->bcount);
 
   if(curr->bcount == -2) {
     ddbg_assert2(currdisk->outwait == 0, "non-NULL outwait found");
@@ -636,6 +663,8 @@ static void disk_reconnection_or_transfer_complete (ioreq_event *curr)
 
     disk_send_event_up_path(curr, (delay * currdisk->timescale));
     currdisk->outstate = DISK_WAIT_FOR_CONTROLLER;
+    if(COMPRESS_PRINT_DEBUG)
+     printf( "disk %8p outstate DISK_WAIT_FOR_CONTROLLER\n", currdisk);
   } 
   else if(curr->bcount == 0) {
     disk_request_complete(currdisk, currdiskreq, curr);
@@ -662,6 +691,9 @@ static void disk_find_new_seg_owner(disk *currdisk, segment *seg)
     fprintf (outputfile, "%12.6f            Entering disk_find_new_seg_owner for disk %d\n", simtime, currdisk->devno);
     fflush(outputfile);
   }
+
+   if(COMPRESS_PRINT_DEBUG)
+        printf ("%12.6f            Entering disk_find_new_seg_owner for disk %d\n", simtime, currdisk->devno);
 
   ddbg_assert(seg != NULL);
   ddbg_assert(seg->recyclereq == NULL);
@@ -726,6 +758,8 @@ static void disk_release_hda(disk *currdisk, diskreq *currdiskreq)
     fprintf (outputfile, "%12.6f  %8p  Entering disk_release_hda for disk %d\n", simtime, currdiskreq,currdisk->devno);
     fflush(outputfile);
   }
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("%12.6f  %8p  Entering disk_release_hda for disk %d\n", simtime, currdiskreq,currdisk->devno);
 
   ddbg_assert(currdiskreq != NULL);
 
@@ -843,6 +877,12 @@ static void disk_release_hda(disk *currdisk, diskreq *currdiskreq)
     tmpioreq = currdiskreq->ioreqlist;
     while (tmpioreq) {
       holdioreq = tmpioreq->next;
+      compress_remove_ratio_ioreq(tmpioreq);
+      if (outios){
+          compress_stats_set_completetime(tmpioreq, simtime);
+          compress_stats_print_ioreq(tmpioreq);
+          compress_stats_remove_ioreq(tmpioreq);
+      }
       addtoextraq((event *) tmpioreq);
       tmpioreq = holdioreq;
     }
@@ -865,6 +905,9 @@ static void disk_release_hda(disk *currdisk, diskreq *currdiskreq)
   }
   
   if(release_hda) {
+      int devno = disk_get_devno(currdisk);
+      power_manage_release_hda( devno, simtime);
+//      printf("blkno %d\n", currdiskreq->ioreqlist->blkno);
     if(currdisk->currenthda == currdisk->effectivehda) {
       currdisk->currenthda = NULL;
     }
@@ -1054,6 +1097,8 @@ disk_select_bus_request(disk *currdisk, ioreq_event **busioreq)
     fprintf (outputfile, "%12.6f         Entering disk_select_bus_request for disk %d\n", simtime, currdisk->devno);
     fflush(outputfile);
   }
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("%12.6f         Entering disk_select_bus_request for disk %d\n", simtime, currdisk->devno);
 
   while (currdiskreq) {
     curr_value = -100;
@@ -1151,7 +1196,13 @@ disk_select_bus_request(disk *currdisk, ioreq_event **busioreq)
 	      else {
 		currdiskreq->watermark = (int) (((double) currdiskreq->seg->size * currdisk->readwater) + (double) 0.9999999999);
 	      }
-
+          if(compress_seg_is_enable(currdiskreq->seg)
+              && (currdiskreq->ioreqlist->flags & READ) )
+          {
+            if( currdiskreq->watermark * (COMP_HEAD_SIZE+512) > currdiskreq->seg->size*512 ){
+                currdiskreq->watermark = (currdiskreq->seg->size * 512) /( COMP_HEAD_SIZE + 512 );
+            }
+          }
 	      currioreq = disk_request_needs_bus(currdisk,currdiskreq,TRUE);
 	      if(!currioreq) {
 		currdiskreq->seg = NULL;
@@ -1268,6 +1319,8 @@ disk_check_bus (disk *currdisk, diskreq *currdiskreq)
     fprintf (outputfile, "%12.6f  %8p  Entering disk_check_bus for disk %d\n", simtime, currdiskreq,currdisk->devno);
     fflush(outputfile);
   }
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("%12.6f    %8p    Entering disk_check_bus for disk %d\n", simtime, currdiskreq,currdisk->devno);
 
   if(currdisk->buswait) {
     return;
@@ -1528,7 +1581,8 @@ disk_initiate_seek (disk *currdisk,
     fprintf (outputfile, "%12.6f            Entering disk_initiate_seek to %d for disk %d\n", simtime, curr->blkno, curr->devno);
     fflush(outputfile);
   }
-
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("%12.6f    %p        Entering disk_initiate_SEEK to %d for disk %d\n", simtime, curr, curr->blkno, curr->devno);
 
   curr->type = NULL_EVENT;
   seg->time = simtime + delay;
@@ -1598,6 +1652,8 @@ disk_initiate_seek (disk *currdisk,
   if(firstseek) {
     currdisk->stat.seekdistance = seekdist;
     currdisk->stat.seektime = seektime;
+    if (outios)
+        compress_stats_set_seekoverhead(currdisk->effectivehda->ioreqlist, seektime);
     currdisk->stat.latency = (double) -1.0;
     currdisk->stat.xfertime = (double) -1.0;
   } 
@@ -1614,7 +1670,6 @@ disk_initiate_seek (disk *currdisk,
   /*
     fprintf (outputfile, "\nSeek from cyl %d head %d to cyl %d head %d, time %f\n", currdisk->currcylno, currdisk->currsurface, currcylno, currsurface, seektime);
   */
-
 
   return TRUE;
 } // disk_initiate_seek()
@@ -1786,14 +1841,24 @@ disk_check_hda_pending(disk *currdisk,
 		 currdisk->minreadahead), 
 		currdisk->model->dm_sectors));
 
+        if(compress_seg_is_enable( seg ) ){
+            seg->maxreadaheadblkno = max(seg->maxreadaheadblkno, min(compress_seg_get_max_readahead(currdisk,seg,nextioreq), currdisk->model->dm_sectors));
+        }else{
       seg->maxreadaheadblkno = 
 	max(seg->maxreadaheadblkno, 
 	    min(disk_buffer_get_max_readahead(currdisk,seg,nextioreq),
 		currdisk->model->dm_sectors));
+        }
     }
 
     currdisk->immed = currdisk->immedread;
     seg->state = BUFFER_READING;
+    int max_readahead = 0;
+    if(compress_seg_is_enable( seg ) ){
+        max_readahead = compress_seg_get_max_readahead(currdisk, seg, nextioreq);
+    }else{
+        max_readahead  = disk_buffer_get_max_readahead(currdisk, seg, nextioreq);
+    }
     if(seg->recyclereq) {
       seg->access->blkno = nextdiskreq->outblkno;
       *initiate_seek = TRUE;
@@ -1806,9 +1871,7 @@ disk_check_hda_pending(disk *currdisk,
     } 
     else if(seg->endblkno < 
 	    max(seg->maxreadaheadblkno, 
-		disk_buffer_get_max_readahead(currdisk, 
-					      seg, 
-					      nextioreq))) 
+		max_readahead)) 
     {
       seg->access->flags |= BUFFER_BACKGROUND;
       if(currdisk->readaheadifidle) {
@@ -1925,6 +1988,8 @@ static void disk_check_hda(disk *currdisk,
 	     " for disk %d\n", simtime, currdiskreq,currdisk->devno);
     fflush(outputfile);
   }
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("%12.6f  %8p  Entering disk_check_hda for disk %d\n", simtime, currdiskreq,currdisk->devno);
 
   if(currdisk->const_acctime) {
     return;
@@ -1996,6 +2061,8 @@ static void disk_check_hda(disk *currdisk,
   }
 
   if(initiate_seek) {
+      int devno = disk_get_devno(currdisk);
+      power_manage_initiate_hda( devno, simtime);
     if(nextdiskreq->overhead_done > simtime) {
       delay += nextdiskreq->overhead_done - simtime;
     }
@@ -2043,6 +2110,8 @@ static void disk_buffer_stop_access (disk *currdisk)
     fprintf (outputfile, "%12.6f  %8p  Entering disk_buffer_stop_access\n", simtime, effective);
     fflush(outputfile);
   }
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("%12.6f  %8p  Entering disk_buffer_stop_access\n", simtime, effective);
 
   ddbg_assert2(effective != 0, "disk has NULL effectivehda");
 
@@ -2096,6 +2165,8 @@ disk_buffer_attempt_access_swap(disk *currdisk,
     fprintf (outputfile, "                        trying to swap %8p\n", effective);
     fflush(outputfile);
   }
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("%12.6f  %8p  Entering disk_buffer_attempt_access_swap\n", simtime, currdiskreq);
 
   ddbg_assert2(effective != 0, "disk has NULL effectivehda");
 
@@ -2129,8 +2200,11 @@ disk_buffer_attempt_access_swap(disk *currdisk,
       seg->access->flags = currioreq->flags;
 
       seg->minreadaheadblkno = max(seg->minreadaheadblkno, min((currioreq->blkno + currioreq->bcount + currdisk->minreadahead), currdisk->model->dm_sectors));
-
-      seg->maxreadaheadblkno = max(seg->maxreadaheadblkno, min(disk_buffer_get_max_readahead(currdisk,seg,currioreq), currdisk->model->dm_sectors));
+      if(compress_seg_is_enable( seg ) ){
+          seg->maxreadaheadblkno = max(seg->maxreadaheadblkno, min(compress_seg_get_max_readahead(currdisk,seg,currioreq), currdisk->model->dm_sectors));
+      }else{
+          seg->maxreadaheadblkno = max(seg->maxreadaheadblkno, min(disk_buffer_get_max_readahead(currdisk,seg,currioreq), currdisk->model->dm_sectors));
+      }
 
       if((seg->endblkno >= (currioreq->blkno + currioreq->bcount)) 
 	 && (seg->endblkno < seg->maxreadaheadblkno)) 
@@ -2178,6 +2252,8 @@ disk_activate_read(disk *currdisk,
     fprintf (outputfile, "                        setseg = %d\n", setseg);
     fflush(outputfile);
   }
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("%12.6f  %8p  Entering disk_activate_read, setseg%d\n", simtime, currdiskreq, setseg);
 
   /* use specified access time instead of simulating mechanical
      activity */
@@ -2275,6 +2351,8 @@ disk_activate_write(disk *currdisk,
     fprintf (outputfile, "                        setseg = %d\n", setseg);
     fflush(outputfile);
   }
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("%12.6f  %8p  Entering disk_activate_write, setseg%d\n", simtime, currdiskreq, setseg);
 
   if(!currdisk->currenthda && (currdisk->const_acctime)) {
     currdisk->currenthda = 
@@ -2363,7 +2441,6 @@ disk_request_arrive(ioreq_event *curr)
   /* check for valid request. this is done in a few places; this is
    * just the first. also in lbn/pbn translation.
    */
-  
   ddbg_assert3((curr->blkno >= 0) 
 	     && (curr->bcount > 0) 
 	     &&(curr->blkno + curr->bcount) <= currdisk->model->dm_sectors,
@@ -2378,10 +2455,15 @@ disk_request_arrive(ioreq_event *curr)
   /* create a new request, set it up for initial interrupt.  I don't
    * know what all the interrupts are for -rcohen 
    */
+  if(COMPRESS_PRINT_DEBUG)
+      printf("%f disk request arrive: %p, blkno %d bcount %d \n", simtime, curr, curr->blkno, curr->bcount);
+
   currdisk->busowned = disk_get_busno(curr);
   intrp = ioreq_copy(curr);
   intrp->type = IO_INTERRUPT_ARRIVE;
   currdisk->outstate = DISK_WAIT_FOR_CONTROLLER;
+  if(COMPRESS_PRINT_DEBUG)
+     printf( "disk %8p outstate changed to DISK_WAIT_FOR_CONTROLLER\n", currdisk);
 
   /* create the diskreqlist structure that will be attached to the
    * segment and fill in values. the original unmodified request is
@@ -2394,6 +2476,10 @@ disk_request_arrive(ioreq_event *curr)
   new_diskreq->bus_next = NULL;
   new_diskreq->outblkno = new_diskreq->inblkno = curr->blkno;
 
+  if(COMPRESS_PRINT_DEBUG){
+    printf ("%12.6f  %8p  Entering disk_request_arrive\n", simtime, new_diskreq);
+    printf ("                        disk = %d, blkno = %d, bcount = %d, read = %d\n",curr->devno, curr->blkno, curr->bcount, (READ & curr->flags));
+    }
 
 
   /* debugging stuff */
@@ -2422,7 +2508,8 @@ disk_request_arrive(ioreq_event *curr)
    * detect LIMITED_FASTWRITE possibilities.  
    */
 
-  ioqueue_add_new_request(currdisk->queue, curr);
+    power_desp[curr->devno]->disk_last_service_time = simtime;
+  ioqueue_add_new_request_power(currdisk->queue, curr);
 
   seg = disk_buffer_select_segment(currdisk, new_diskreq,TRUE);
 
@@ -2479,6 +2566,13 @@ disk_read_arrive(disk *currdisk,
       } 
       else {
 	readwater = (int)((((double) seg->size * currdisk->readwater)) + (double) 0.9999999999);
+      }
+      if(compress_seg_is_enable(seg)
+          && (curr->flags & READ) )
+      {
+        if( readwater * (COMP_HEAD_SIZE+512) > seg->size*512 ){
+            readwater = (seg->size * 512) /( COMP_HEAD_SIZE + 512 );
+        }
       }
       if((seg->endblkno <= curr->blkno) 
 	 || ((seg->endblkno - curr->blkno) < min(readwater,curr->bcount))) 
@@ -2758,6 +2852,8 @@ static void disk_disconnect (ioreq_event *curr)
     fprintf (outputfile, "%12.6f  %8p  Entering disk_disconnect for disk %d\n", simtime, currdiskreq, currdisk->devno);
     fflush(outputfile);
   }
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("%12.6f  %8p  Entering disk_disconnect for disk %d\n", simtime, currdiskreq, currdisk->devno);
 
   tmpioreq = currdiskreq->ioreqlist;
   while (tmpioreq) {
@@ -2826,6 +2922,8 @@ static void disk_completion (ioreq_event *curr)
     fprintf (outputfile, "%12.6f  %8p  Entering disk_completion for disk %d\n", simtime, currdiskreq,currdisk->devno);
     fflush(outputfile);
   }
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("%12.6f  %8p  Entering disk_completion for disk %d\n", simtime, currdiskreq,currdisk->devno);
 
   ddbg_assert2(currdiskreq != 0, "effectivebus is NULL");
 
@@ -2872,6 +2970,12 @@ static void disk_completion (ioreq_event *curr)
       tmpioreq = currdiskreq->ioreqlist;
       currdiskreq->ioreqlist = tmpioreq->next;
       addtoextraq((event *) tmpioreq);
+      compress_remove_ratio_ioreq(tmpioreq);
+      if (outios){
+          compress_stats_set_completetime(tmpioreq, simtime);
+          compress_stats_print_ioreq(tmpioreq);
+          compress_stats_remove_ioreq(tmpioreq);
+      }
     }
     if((currdiskreq == currdisk->effectivehda) ||
        (currdiskreq == currdisk->currenthda)) {
@@ -2966,6 +3070,9 @@ static void disk_interrupt_complete (ioreq_event *curr)
 
 void disk_event_arrive (ioreq_event *curr)
 {
+
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("Entered disk_event_arrive - devno %d, blkno %d, type %d, cause %d, time %f\n", curr->devno, curr->blkno, curr->type, curr->cause, curr->time);
   disk *currdisk = getdisk (curr->devno);
 
   disksim_inst_enter();
@@ -3074,6 +3181,8 @@ disk_buffer_request_complete(disk *currdisk, diskreq *currdiskreq)
     fprintf (outputfile, "%12.6f  %8p  Entering disk_buffer_request_complete\n", simtime, currdiskreq);
     fflush(outputfile);
   }
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("%12.6f  %8p  Entering disk_buffer_request_complete\n", simtime, currdiskreq);
 
   while (tmpioreq && tmpioreq->next) {
     tmpioreq = tmpioreq->next;
@@ -3221,7 +3330,7 @@ disk_buffer_request_complete(disk *currdisk, diskreq *currdiskreq)
     if(!reading) {
       tmpioreq = currdiskreq->ioreqlist;
       while (tmpioreq) {
-	ddbg_assert2(ioqueue_physical_access_done(currdisk->queue,tmpioreq),
+	ddbg_assert2(ioqueue_physical_access_done_power(currdisk->queue,tmpioreq),
 		   "disk_buffer_request_complete:  ioreq_event "
 		   "not found by ioqueue_physical_access_done call");
 
@@ -3276,6 +3385,7 @@ static void disk_got_remapped_sector (disk *currdisk, ioreq_event *curr)
 	assert(0);
       }
       seg->endblkno++;
+      compress_debug( __FILE__, __FUNCTION__, __LINE__ );
     } else {
       if(curr->blkno != currdiskreq->inblkno) {
 	fprintf(stderr, "Logical address of remapped sector not next to read (#2)\n");
@@ -3331,6 +3441,8 @@ disk_buffer_update_outbuffer(disk *currdisk, segment *seg)
   fprintf (outputfile, "Entered disk_buffer_update_ongoing - devno %d\n", seg->access->devno);
 #endif
 
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("Entered disk_buffer_update_buffer ongoing - devno %d\n", seg->diskreqlist->ioreqlist->devno);
   if(currdisk->outwait) {
     return;
   }
@@ -3340,19 +3452,29 @@ disk_buffer_update_outbuffer(disk *currdisk, segment *seg)
   if(blks == -1) {
     tmptime = disk_get_blktranstime(tmpioreq);
     if(tmptime != (double) 0.0) {
+     if( compress_seg_is_enable( seg ) ){
+          tmptime = (tmptime > COMP_READ_TIME )
+              ? tmptime
+              : COMP_READ_TIME;
+     }
       blks = (int) ((simtime - currdisk->starttrans) / tmptime);
     } 
     else {
       blks = seg->outbcount;
     }
   }
-
   blks = min(seg->outbcount, (blks - currdisk->blksdone));
   currdisk->blksdone += blks;
   currdiskreq->outblkno += blks;
   seg->outbcount -= blks;
-
+  if(COMPRESS_PRINT_DEBUG)
+   printf("outbuffer %d blksdone %d outblkno %d outbcount %d\n", blks, currdisk->blksdone, currdiskreq->outblkno, seg->outbcount );
   if(currdiskreq->outblkno > seg->endblkno) {
+    if(compress_seg_is_enable(seg) ){
+        while(seg->endblkno < currdiskreq->outblkno){
+           compress_buffer_add(seg, seg->endblkno);
+        }
+    }
     seg->endblkno = currdiskreq->outblkno;
   }
 
@@ -3372,6 +3494,8 @@ disk_buffer_update_outbuffer(disk *currdisk, segment *seg)
 #if DEBUG >= 1
 fprintf (outputfile, "Exiting disk_buffer_update_ongoing\n");
 #endif
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("Exiting disk_buffer_update_ongoing\n");
 
     }
 
@@ -3398,6 +3522,11 @@ disk_buffer_transfer_size(disk *currdisk,
     fprintf (outputfile, "Entered disk_buffer_transfer_size - devno %d\n", curr->devno);
     fprintf (outputfile, "outstate %d, outblkno %d, outbcount %d, endblkno %d, inblkno %d\n", seg->outstate, currdiskreq->outblkno, seg->outbcount, seg->endblkno, seg->inblkno);
   */
+
+  if(COMPRESS_PRINT_DEBUG){
+    printf ("Entered disk_buffer_transfer_size - devno %d\n", curr->devno);
+    printf ("    seg outstate %d, outblkno %d, outbcount %d, endblkno %d, startblkno %d\n", seg->outstate, currdiskreq->outblkno, seg->outbcount, seg->endblkno, seg->startblkno);
+  }
 
   if(currdisk->const_acctime) {
     if(currdiskreq->overhead_done <= simtime) {
@@ -3536,6 +3665,9 @@ disk_buffer_transfer_size(disk *currdisk,
     /*
       fprintf (outputfile, "%f Start transfer of %d sectors of %d (from %d)\n", simtime, seg->outbcount, seg->reqlist->bcount, seg->reqlist->blkno);
     */
+  if(COMPRESS_PRINT_DEBUG)
+      printf ("%f Start transfer of %d sectors of %d (from %d)\n", simtime, seg->outbcount, curr->bcount, curr->blkno);
+
     if((!(currdiskreq->flags & SEG_OWNED) 
 	&& (seg->endblkno < currdiskreq->outblkno)) 
        || (seg->outbcount <= 0)) 
@@ -3731,6 +3863,10 @@ int disk_buffer_stopable_access (disk *currdisk, diskreq *currdiskreq)
     fprintf (outputfile, "%12.6f  %8p  Entering disk_buffer_stopable_access\n", simtime, currdiskreq);
     fprintf (outputfile, "                        checking if %8p is stoppable\n", effective);
     fflush(outputfile);
+  }
+  if(COMPRESS_PRINT_DEBUG){
+    printf ("%12.6f  %8p  Entering disk_buffer_stopable_access\n", simtime, currdiskreq);
+    printf ("                        checking if %8p is stoppable\n", effective);
   }
 
   if(!effective) {
@@ -4015,6 +4151,8 @@ disk_buffer_seekdone(disk *currdisk, ioreq_event *curr)
     fprintf (outputfile, "%12.6f  %8p  Entering disk_buffer_seekdone for disk %d\n", simtime, currdiskreq,currdisk->devno);
     fflush(outputfile);
   }
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("%12.6f  %8p  Entering disk_buffer_seekdone for disk %d\n", simtime, currdiskreq,currdisk->devno);
 
   dbskdone_check_times();
   // state-update stolen from above
@@ -4384,6 +4522,10 @@ disk_buffer_sector_done (disk *currdisk, ioreq_event *curr)
     }
   }
 
+  if(COMPRESS_PRINT_DEBUG){
+   printf("[%d - %d] sector done begin %f \n", seg->startblkno, seg->endblkno, simtime);
+    printf ("More state: blkno %d, cause %d, currblkno %d, currcause %d, first %d, last %d\n", curr->blkno, curr->cause,currblkno, currcause, first, last );
+  }
 
   if(!curr->bcount) { // first sector after repos (? see comment below)
     curr->time = simtime;
@@ -4486,7 +4628,10 @@ disk_buffer_sector_done (disk *currdisk, ioreq_event *curr)
 		 ("seg->state 0x%x, readanyfreeblocks %d",
 		  seg->state,
 		  currdisk->readanyfreeblocks));
-		 
+      if(compress_seg_is_enable(seg) ){	 
+         // ??? should be reset?
+         compress_seg_reset(seg, currblkno);
+      }
       seg->startblkno = currblkno;
       firstblkno = currblkno + 1;
       ddbg_assert(firstblkno < currdisk->model->dm_sectors);
@@ -4529,6 +4674,8 @@ disk_buffer_sector_done (disk *currdisk, ioreq_event *curr)
     disk_buffer_update_outbuffer(currdisk, seg);
   }
 
+  if(COMPRESS_PRINT_DEBUG)
+    printf ("State check: firstblkno %d, lastblkno %d, currblkno %d, read %d\n", firstblkno, lastblkno, currblkno, (curr->flags & READ));
 
   /* Statistics gathering */
   if(endlat == 2) {
@@ -4543,6 +4690,17 @@ disk_buffer_sector_done (disk *currdisk, ioreq_event *curr)
 
   if(currdiskreq != seg->recyclereq) {
     if(seg->state == BUFFER_READING) {
+      if( curr->bcount == 1
+          && compress_seg_is_enable(seg)
+          && ((currblkno+1) == firstblkno) )
+      {
+         compress_buffer_add(seg, firstblkno-1);
+         tmpioreq = currdiskreq->ioreqlist;
+         while (tmpioreq && tmpioreq->next) {
+            tmpioreq = tmpioreq->next;
+         }
+         seg->maxreadaheadblkno = max(seg->maxreadaheadblkno, min( compress_seg_get_max_readahead( currdisk, seg, tmpioreq), currdisk->model->dm_sectors) );
+      }
       seg->endblkno = firstblkno;
     } 
     else {
@@ -4552,6 +4710,8 @@ disk_buffer_sector_done (disk *currdisk, ioreq_event *curr)
     disk_buffer_segment_wrap(seg, seg->endblkno);
 
     if(disk_buffer_request_complete(currdisk, currdiskreq)) {
+      if(COMPRESS_PRINT_DEBUG)
+            printf ("Leaving disk_buffer_sector_done\n");
       /* fprintf (outputfile, "Leaving disk_buffer_sector_done\n"); */
       return;
     }
@@ -4650,6 +4810,9 @@ disk_buffer_sector_done (disk *currdisk, ioreq_event *curr)
     {
       seg->startblkno = currdiskreq->ioreqlist->blkno;
       seg->endblkno = seg->startblkno;
+      if(compress_seg_is_enable(seg) ){
+          compress_seg_reset(seg, seg->startblkno);
+      }
       currcause = -1; // DM_SLIPPED
     }
     
@@ -4680,6 +4843,17 @@ disk_buffer_sector_done (disk *currdisk, ioreq_event *curr)
     addtointq((event *) curr);
 
   } // else  ( firstblkno != (<) last)
+
+    if(COMPRESS_RECORD_DEBUG)
+        compress_seg_print_stats(seg);
+    if( compress_seg_get_phy_left( seg ) < 514 ) {
+        if(COMPRESS_PRINT_DEBUG)
+            printf("FULL compress\n");
+    }
+    if(COMPRESS_PRINT_DEBUG){
+        printf ("Leaving disk_buffer_sector_done start %d end %d\n", seg->startblkno, seg->endblkno);
+        printf("seg size: %d, compress count %d, phy_left %d\n", seg->size, compress_seg_get_sector_count(seg), compress_seg_get_phy_left(seg) );
+    }
 
 } // disk_buffer_sector_done()
 

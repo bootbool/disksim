@@ -158,7 +158,7 @@ struct device_header *getdevbyname(char *name,
 				   int *type);
 
 /* map a global device number to a device-type specific device number */
-INLINE int dev_map_devno(int n);
+extern INLINE int dev_map_devno(int n);
 
 void device_initialize_deviceinfo(void);
 
